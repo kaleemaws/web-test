@@ -6,19 +6,61 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  build-test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: ecommerce_db
+          POSTGRES_USER: ecommerce_user
+          POSTGRES_PASSWORD: ecommerce_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U ecommerce_user"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Login to Docker Hub
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+      - name: Build Docker Image
+        run: docker build -t web-test:v2 .
 
-      - name: Build Image
-        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/web-test:v2 .
+      - name: Wait for PostgreSQL
+        run: |
+          echo "Waiting for PostgreSQL..."
+          sleep 10
 
-      - name: Push Image
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/web-test:v2
+      - name: Run Application Container
+        run: |
+          docker run -d \
+            -p 8084:80 \
+            --name test-container \
+            -e DB_HOST=localhost \
+            -e DB_PORT=5432 \
+            -e DB_NAME=ecommerce_db \
+            -e DB_USER=ecommerce_user \
+            -e DB_PASSWORD=ecommerce_pass \
+            web-test:v2
+
+          sleep 10
+
+      - name: Validate Application Running
+        run: curl -f http://localhost:8084 || exit 1
+
+      - name: Install PostgreSQL Client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Validate Database Connection
+        run: |
+          PGPASSWORD=ecommerce_pass psql \
+            -h localhost \
+            -U ecommerce_user \
+            -d ecommerce_db \
+            -c "SELECT 1;"
 
